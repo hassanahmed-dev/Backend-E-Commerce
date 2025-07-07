@@ -6,6 +6,7 @@ const multer = require('multer');
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 const streamifier = require('streamifier');
+const verifyToken = require('../middleware/authMiddleware');
 const { requireAdmin } = require('../middleware/authMiddleware');
 
 // GET all products
@@ -48,7 +49,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST add new product with image
-router.post('/', requireAdmin, upload.single('image'), async (req, res) => {
+router.post('/', verifyToken, requireAdmin, upload.single('image'), async (req, res) => {
   try {
     console.log('Received product add request');
     // Parse array fields if they are sent as JSON strings
@@ -103,7 +104,7 @@ router.post('/', requireAdmin, upload.single('image'), async (req, res) => {
 });
 
 // PUT update product with image
-router.put('/:id', requireAdmin, upload.single('image'), async (req, res) => {
+router.put('/:id', verifyToken, requireAdmin, upload.single('image'), async (req, res) => {
   try {
     // Parse JSON fields if needed
     if (typeof req.body.colors === 'string') {
@@ -166,7 +167,7 @@ router.put('/:id', requireAdmin, upload.single('image'), async (req, res) => {
 });
 
 // DELETE product
-router.delete('/:id', requireAdmin, async (req, res) => {
+router.delete('/:id', verifyToken, requireAdmin, async (req, res) => {
   try {
     const product = await Product.findOneAndDelete({ id: req.params.id });
     if (!product) return res.status(404).json({ error: 'Product not found' });
@@ -175,12 +176,5 @@ router.delete('/:id', requireAdmin, async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
-
-function adminMiddleware(req, res, next) {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ message: 'Admin access only' });
-  }
-  next();
-}
 
 module.exports = router; 
