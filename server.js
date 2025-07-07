@@ -8,7 +8,7 @@ const app = express();
 // Middleware
 app.use(cors({
   origin: process.env.FRONTEND_URL, // Frontend URL
-  methods: ['GET', 'POST', 'PUT', 'DELETE'], // Allow all methods
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allow all methods
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
