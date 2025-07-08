@@ -57,6 +57,12 @@ const OrderSchema = new mongoose.Schema({
   cancellationReason: { type: String },
   cancelledBy: { type: String, enum: ['admin', 'user'] },
   createdAt: { type: Date, default: Date.now },
+  statusUpdates: [
+    {
+      status: { type: String },
+      date: { type: Date, default: Date.now }
+    }
+  ],
 });
 
 module.exports = mongoose.model('Order', OrderSchema); 

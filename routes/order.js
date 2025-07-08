@@ -110,17 +110,40 @@ router.put('/:id/status', authMiddleware, requireAdmin, async (req, res) => {
   try {
     const { status, reason, cancelledBy } = req.body;
     const update = { orderStatus: status };
+
+    // Find order by correct field (custom id ya _id)
+    const order = await Order.findOne({ id: req.params.id }); // ya findById(req.params.id) as per your frontend
+
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    // Sahi logic: accepted/delivered + cash-on-delivery => paid
+    if (
+      (status === 'accepted' || status === 'delivered') &&
+      order.paymentMethod === 'cash-on-delivery'
+    ) {
+      update.paymentStatus = 'paid';
+      console.log(" chal gya ")
+    }
+    console.log("paid ha ya nhi ")
+
     if (status === 'cancelled') {
       if (reason) update.cancellationReason = reason;
       if (cancelledBy) update.cancelledBy = cancelledBy;
     }
-    const order = await Order.findOneAndUpdate(
-      { id: req.params.id },
+
+    // Add status update to history
+    const now = new Date();
+    let statusUpdates = order.statusUpdates || [];
+    statusUpdates.push({ status, date: now });
+    update.statusUpdates = statusUpdates;
+
+    const updatedOrder = await Order.findOneAndUpdate(
+      { id: req.params.id }, // ya _id: req.params.id
       update,
       { new: true }
     );
-    if (!order) return res.status(404).json({ message: 'Order not found' });
-    // Send email to user
+
+    // Send email
     const statusMap = {
       pending: 'Order Received',
       accepted: 'Order Accepted',
@@ -129,17 +152,16 @@ router.put('/:id/status', authMiddleware, requireAdmin, async (req, res) => {
       cancelled: 'Cancelled',
       failed: 'Failed',
     };
-    const userEmail = order.billingDetails?.email;
+    const userEmail = updatedOrder.billingDetails?.email;
     if (userEmail) {
-      await sendOrderStatusEmail(userEmail, order.id, statusMap[status] || status);
+      await sendOrderStatusEmail(userEmail, updatedOrder._id, statusMap[status] || status);
     }
-    res.json(order);
+
+    res.json(updatedOrder);
   } catch (error) {
-    console.error(error);
     res.status(500).json({ message: 'Failed to update status' });
   }
 });
-
 
 router.get('/user', authMiddleware, async (req, res) => {
   try {
@@ -208,6 +230,36 @@ router.get('/summary', authMiddleware, requireAdmin, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET: Product order counts for all products (admin only)
+router.get('/product-order-counts', authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    // Aggregate order counts for each product
+    const orderCounts = await Order.aggregate([
+      { $unwind: "$cartItems" },
+      { $group: {
+          _id: "$cartItems.productId",
+          orderCount: { $sum: "$cartItems.quantity" }
+        }
+      }
+    ]);
+    // Map to productId: orderCount
+    const orderCountMap = {};
+    orderCounts.forEach(item => {
+      orderCountMap[item._id?.toString()] = item.orderCount;
+    });
+    // Get all products
+    const products = await Product.find();
+    // Attach orderCount to each product
+    const productsWithOrderCount = products.map(product => ({
+      ...product.toObject(),
+      orderCount: orderCountMap[product._id.toString()] || 0
+    }));
+    res.json(productsWithOrderCount);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch product order counts' });
   }
 });
 

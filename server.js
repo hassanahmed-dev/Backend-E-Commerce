@@ -5,12 +5,10 @@ const mongoose = require('mongoose');
 
 const app = express();
 
-// CORS sabse pehle
 app.use(cors({
-  origin: process.env.FRONTEND_URL,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin: process.env.FRONTEND_URL, // Allow your frontend origin
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // Explicitly allow PATCH
+  credentials: true, // Allow cookies/auth headers if needed
 }));
 
 // Manual CORS headers (for extra safety)
