@@ -259,7 +259,7 @@ const transporter = nodemailer.createTransport({
 // Enable CORS with specific options
 router.use(cors({
   origin: 'https://frontend-e-commerce-ruby.vercel.app', // Allow your frontend origin
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], // Explicitly allow PATCH
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // Explicitly allow PATCH
   credentials: true, // Allow cookies/auth headers if needed
 }));
 
