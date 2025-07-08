@@ -40,13 +40,9 @@ mongoose
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.log("MongoDB connection error:", err));
 
-api.get("/", async (req, res) => {
-  try {
-    res.send("server is running");
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  app.get("/", (req, res) => {
+    res.send("Server is running");
+  })
 // Routes
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/products", require("./routes/product"));
