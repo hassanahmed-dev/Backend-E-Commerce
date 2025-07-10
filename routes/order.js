@@ -163,6 +163,38 @@ router.put('/:id/status', authMiddleware, requireAdmin, async (req, res) => {
   }
 });
 
+// User cancels their own order
+router.put('/:id/cancel', authMiddleware, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const order = await Order.findById(req.params.id);
+
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    // Sirf wahi user apna order cancel kar sakta hai
+    if (order.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Not authorized to cancel this order' });
+    }
+
+    // Agar already cancelled/delivered hai toh cancel na ho
+    if (order.orderStatus === 'cancelled' || order.orderStatus === 'delivered') {
+      return res.status(400).json({ error: 'Order cannot be cancelled' });
+    }
+
+    order.orderStatus = 'cancelled';
+    order.cancellationReason = reason || 'Cancelled by user';
+    order.cancelledBy = 'user';
+    order.statusUpdates = order.statusUpdates || [];
+    order.statusUpdates.push({ status: 'cancelled', date: new Date() });
+
+    await order.save();
+
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to cancel order' });
+  }
+});
+
 router.get('/user', authMiddleware, async (req, res) => {
   try {
     const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
