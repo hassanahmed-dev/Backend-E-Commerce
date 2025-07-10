@@ -1,15 +1,31 @@
 const mongoose = require('mongoose');
 
-function generateFourDigitId() {
-  return Math.floor(1000 + Math.random() * 9000).toString();
+async function generateFourDigitId() {
+  let id;
+  let isUnique = false;
+  const maxRetries = 5;
+  let retries = 0;
+
+  while (!isUnique && retries < maxRetries) {
+    id = Math.floor(1000 + Math.random() * 9000).toString();
+    const existingOrder = await mongoose.model('Order').findOne({ id });
+    if (!existingOrder) {
+      isUnique = true;
+    }
+    retries++;
+  }
+
+  if (!isUnique) {
+    throw new Error('Failed to generate unique order ID');
+  }
+  return id;
 }
 
 const OrderSchema = new mongoose.Schema({
   id: {
     type: String,
     unique: true,
-    required: true,
-    default: generateFourDigitId
+    required: true
   },
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   userName: { type: String },
@@ -59,10 +75,10 @@ const OrderSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   statusUpdates: [
     {
-      status: { type: String },
+      status: { type: String, enum: ['pending', 'accepted', 'out-for-delivery', 'delivered', 'cancelled', 'failed'] },
       date: { type: Date, default: Date.now }
     }
   ],
 });
 
-module.exports = mongoose.model('Order', OrderSchema); 
+module.exports = mongoose.model('Order', OrderSchema);

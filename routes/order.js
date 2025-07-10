@@ -8,21 +8,50 @@ const { requireAdmin } = require('../middleware/authMiddleware');
 
 const nodemailer = require('nodemailer');
 
-// Create a new order (login required)
+const generateFourDigitId = require('../models/Order').generateFourDigitId || async function generateFourDigitId() {
+  let id;
+  let isUnique = false;
+  const maxRetries = 5;
+  let retries = 0;
+  while (!isUnique && retries < maxRetries) {
+    id = Math.floor(1000 + Math.random() * 9000).toString();
+    const existingOrder = await Order.findOne({ id });
+    if (!existingOrder) {
+      isUnique = true;
+    }
+    retries++;
+  }
+  if (!isUnique) {
+    throw new Error('Failed to generate unique order ID');
+  }
+  return id;
+};
+
+
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const {
-      cartItems,
-      billingDetails,
-      shippingDetails,
-      paymentMethod,
-      paymentStatus,
-      total,
-      shipping,
-      finalTotal,
-      stripePaymentId,
+      cartItems = [],
+      billingDetails = {},
+      shippingDetails = {},
+      paymentMethod = 'cash-on-delivery',
+      paymentStatus = 'pending',
+      total = 0,
+      shipping = 0,
+      finalTotal = 0,
+      stripePaymentId = '',
     } = req.body;
+
+    if (!cartItems.length) {
+      return res.status(400).json({ error: 'Cart items are required' });
+    }
+    if (!billingDetails.email && !billingDetails.phone) {
+      return res.status(400).json({ error: 'Billing details (email or phone) are required' });
+    }
+
+    const id = await generateFourDigitId();
     const orderData = {
+      id, // <-- set id manually
       cartItems,
       billingDetails,
       shippingDetails,
@@ -35,61 +64,68 @@ router.post('/', authMiddleware, async (req, res) => {
       user: req.user._id,
       userName: req.user.name,
       totalPKR: req.body.totalPKR || total,
-      totalUSD: req.body.totalUSD,
+      totalUSD: req.body.totalUSD || 0,
       finalTotalPKR: req.body.finalTotalPKR || finalTotal,
-      finalTotalUSD: req.body.finalTotalUSD,
+      finalTotalUSD: req.body.totalUSD || 0,
       orderStatus: paymentMethod === 'credit-card' ? 'accepted' : 'pending',
     };
     const order = new Order(orderData);
     await order.save();
 
-    // Update product stock after order
     for (const item of cartItems) {
       const product = await Product.findById(item.productId);
-      if (product) {
-        // If color variant is specified, update color-wise stock
-        if (item.color && Array.isArray(product.colors)) {
-          const colorObj = product.colors.find(c => c.color === item.color);
-          if (colorObj) {
-            colorObj.stock = Math.max(0, colorObj.stock - item.quantity);
-          }
-          // Update main product stock as sum of all color stocks
-          product.stock = product.colors.reduce((sum, c) => sum + (c.stock || 0), 0);
-        } else {
-          // Fallback: update main product stock
-          product.stock = Math.max(0, product.stock - item.quantity);
-        }
-        product.status = product.stock > 0 ? 'In Stock' : 'Out Of Stock';
-        await product.save();
+      if (!product) {
+        console.warn(`Product ${item.productId} not found, skipping stock update`);
+        continue;
       }
+      if (item.color && Array.isArray(product.colors)) {
+        const colorObj = product.colors.find(c => c.color === item.color);
+        if (colorObj) {
+          colorObj.stock = Math.max(0, (colorObj.stock || 0) - item.quantity);
+        } else {
+          console.warn(`Color ${item.color} not found for product ${item.productId}`);
+        }
+        product.stock = product.colors.reduce((sum, c) => sum + (c.stock || 0), 0);
+      } else {
+        product.stock = Math.max(0, (product.stock || 0) - item.quantity);
+      }
+      product.status = product.stock > 0 ? 'In Stock' : 'Out Of Stock';
+      await product.save();
     }
 
-    // Clear user's cart after successful order
     await Cart.findOneAndUpdate(
       { userId: req.user._id },
-      { items: [] }
+      { items: [] },
+      { upsert: true, new: true }
     );
 
-    res.status(201).json(order);
+    res.status(201).json({ ...order.toObject(), _id: order._id.toString() });
   } catch (err) {
     console.error('Order Save Error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get all orders (admin or for order management)
+// ... (other routes remain unchanged)
+
 router.get('/', authMiddleware, requireAdmin, async (req, res) => {
   try {
     const orders = await Order.find().populate('user', 'name email');
-    res.status(200).json(orders);
+    res.status(200).json(orders.map(order => {
+      const obj = order.toObject();
+      return { ...obj, _id: order._id.toString(), id: obj.id };
+    }));
   } catch (err) {
     console.error('Order Fetch Error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Email utility
 const sendOrderStatusEmail = async (to, orderId, statusLabel) => {
+  if (!to) {
+    console.warn('No email provided for order status update:', orderId);
+    return;
+  }
   const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -105,45 +141,32 @@ const sendOrderStatusEmail = async (to, orderId, statusLabel) => {
   });
 };
 
-// Update order status (now updates orderStatus field and sends email)
+
+
 router.put('/:id/status', authMiddleware, requireAdmin, async (req, res) => {
   try {
     const { status, reason, cancelledBy } = req.body;
-    const update = { orderStatus: status };
-
-    // Find order by correct field (custom id ya _id)
-    const order = await Order.findOne({ id: req.params.id }); // ya findById(req.params.id) as per your frontend
-
-    if (!order) return res.status(404).json({ message: 'Order not found' });
-
-    // Sahi logic: accepted/delivered + cash-on-delivery => paid
-    if (
-      (status === 'accepted' || status === 'delivered') &&
-      order.paymentMethod === 'cash-on-delivery'
-    ) {
-      update.paymentStatus = 'paid';
-      console.log(" chal gya ")
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ message: `Order with ID ${req.params.id} not found` });
     }
-    console.log("paid ha ya nhi ")
 
+    const update = { orderStatus: status };
+    if ((status === 'accepted' || status === 'delivered') && order.paymentMethod === 'cash-on-delivery') {
+      update.paymentStatus = 'paid';
+    }
     if (status === 'cancelled') {
       if (reason) update.cancellationReason = reason;
       if (cancelledBy) update.cancelledBy = cancelledBy;
     }
 
-    // Add status update to history
     const now = new Date();
     let statusUpdates = order.statusUpdates || [];
     statusUpdates.push({ status, date: now });
     update.statusUpdates = statusUpdates;
 
-    const updatedOrder = await Order.findOneAndUpdate(
-      { id: req.params.id }, // ya _id: req.params.id
-      update,
-      { new: true }
-    );
+    const updatedOrder = await Order.findByIdAndUpdate(req.params.id, update, { new: true });
 
-    // Send email
     const statusMap = {
       pending: 'Order Received',
       accepted: 'Order Accepted',
@@ -154,29 +177,26 @@ router.put('/:id/status', authMiddleware, requireAdmin, async (req, res) => {
     };
     const userEmail = updatedOrder.billingDetails?.email;
     if (userEmail) {
-      await sendOrderStatusEmail(userEmail, updatedOrder._id, statusMap[status] || status);
+      await sendOrderStatusEmail(userEmail, updatedOrder.id || updatedOrder._id, statusMap[status] || status);
     }
 
     res.json(updatedOrder);
   } catch (error) {
-    res.status(500).json({ message: 'Failed to update status' });
+    console.error('Status Update Error:', error);
+    res.status(500).json({ message: 'Failed to update status', details: error.message });
   }
 });
 
-// User cancels their own order
+
 router.put('/:id/cancel', authMiddleware, async (req, res) => {
   try {
     const { reason } = req.body;
     const order = await Order.findById(req.params.id);
 
     if (!order) return res.status(404).json({ error: 'Order not found' });
-
-    // Sirf wahi user apna order cancel kar sakta hai
-    if (order.user.toString() !== req.user._id.toString()) {
+    if (!req.user?._id || order.user.toString() !== req.user._id.toString()) {
       return res.status(403).json({ error: 'Not authorized to cancel this order' });
     }
-
-    // Agar already cancelled/delivered hai toh cancel na ho
     if (order.orderStatus === 'cancelled' || order.orderStatus === 'delivered') {
       return res.status(400).json({ error: 'Order cannot be cancelled' });
     }
@@ -188,6 +208,9 @@ router.put('/:id/cancel', authMiddleware, async (req, res) => {
     order.statusUpdates.push({ status: 'cancelled', date: new Date() });
 
     await order.save();
+    if (order.billingDetails?.email) {
+      await sendOrderStatusEmail(order.billingDetails.email, order.id || order._id, 'Cancelled');
+    }
 
     res.json(order);
   } catch (err) {
@@ -198,24 +221,24 @@ router.put('/:id/cancel', authMiddleware, async (req, res) => {
 router.get('/user', authMiddleware, async (req, res) => {
   try {
     const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
-    res.status(200).json(orders);
+    res.status(200).json(orders.map(order => {
+      const obj = order.toObject();
+      return { ...obj, _id: order._id.toString(), id: obj.id };
+    }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Revenue by day for current week
 router.get('/revenue', authMiddleware, requireAdmin, async (req, res) => {
   try {
-    // Get start of week (Monday)
     const now = new Date();
-    const dayOfWeek = now.getDay(); // 0 (Sun) - 6 (Sat)
-    const diffToMonday = (dayOfWeek + 6) % 7; // days since Monday
+    const dayOfWeek = now.getDay();
+    const diffToMonday = (dayOfWeek + 6) % 7;
     const startOfWeek = new Date(now);
     startOfWeek.setDate(now.getDate() - diffToMonday);
     startOfWeek.setHours(0, 0, 0, 0);
 
-    // Aggregate revenue per day for this week
     const revenue = await Order.aggregate([
       {
         $match: {
@@ -230,7 +253,6 @@ router.get('/revenue', authMiddleware, requireAdmin, async (req, res) => {
       }
     ]);
 
-    // Map MongoDB day numbers to day names
     const dayMap = { 1: "Sun", 2: "Mon", 3: "Tue", 4: "Wed", 5: "Thu", 6: "Fri", 7: "Sat" };
     const weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const revenueData = weekDays.map(day => ({
@@ -244,7 +266,6 @@ router.get('/revenue', authMiddleware, requireAdmin, async (req, res) => {
   }
 });
 
-// Dashboard summary endpoint
 router.get('/summary', authMiddleware, requireAdmin, async (req, res) => {
   try {
     const totalOrders = await Order.countDocuments();
@@ -265,10 +286,8 @@ router.get('/summary', authMiddleware, requireAdmin, async (req, res) => {
   }
 });
 
-// GET: Product order counts for all products (admin only)
 router.get('/product-order-counts', authMiddleware, requireAdmin, async (req, res) => {
   try {
-    // Aggregate order counts for each product
     const orderCounts = await Order.aggregate([
       { $unwind: "$cartItems" },
       { $group: {
@@ -277,14 +296,11 @@ router.get('/product-order-counts', authMiddleware, requireAdmin, async (req, re
         }
       }
     ]);
-    // Map to productId: orderCount
     const orderCountMap = {};
     orderCounts.forEach(item => {
       orderCountMap[item._id?.toString()] = item.orderCount;
     });
-    // Get all products
     const products = await Product.find();
-    // Attach orderCount to each product
     const productsWithOrderCount = products.map(product => ({
       ...product.toObject(),
       orderCount: orderCountMap[product._id.toString()] || 0
@@ -295,4 +311,4 @@ router.get('/product-order-counts', authMiddleware, requireAdmin, async (req, re
   }
 });
 
-module.exports = router; 
+module.exports = router;
